@@ -164,7 +164,8 @@ export default function App() {
     const initData = async () => {
       try {
         setWsStatus('connecting');
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${activeSymbol}&interval=1m&limit=200`);
+        // Use Binance Futures REST API instead of Spot
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${activeSymbol}&interval=1m&limit=200`);
         const data = await res.json();
         
         const formattedKlines: Kline[] = data.map((d: any) => ({
@@ -191,7 +192,8 @@ export default function App() {
     const connectWs = () => {
       if (wsRef.current) wsRef.current.close();
       
-      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${activeSymbol.toLowerCase()}@kline_1m`);
+      // Use Binance Futures WebSocket instead of Spot
+      const ws = new WebSocket(`wss://fstream.binance.com/ws/${activeSymbol.toLowerCase()}@kline_1m`);
       wsRef.current = ws;
 
       ws.onopen = () => setWsStatus('connected');
