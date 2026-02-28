@@ -9,6 +9,13 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const ASSETS = {
+  SOLUSDT: { label: 'SOL/USDT', tickOffset: 0.02, decimals: 2 },
+  BTCUSDT: { label: 'BTC/USDT', tickOffset: 10.00, decimals: 1 },
+  ETHUSDT: { label: 'ETH/USDT', tickOffset: 0.50, decimals: 2 },
+};
+type SymbolKey = keyof typeof ASSETS;
+
 // --- Types ---
 interface Kline {
   time: number;
@@ -136,6 +143,7 @@ function computeIndicators(klines: Kline[]): IndicatorData[] {
 
 // --- Main Component ---
 export default function App() {
+  const [activeSymbol, setActiveSymbol] = useState<SymbolKey>('SOLUSDT');
   const [klines, setKlines] = useState<Kline[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
@@ -152,9 +160,11 @@ export default function App() {
 
   // Fetch initial data & setup WS
   useEffect(() => {
+    let isMounted = true;
     const initData = async () => {
       try {
-        const res = await fetch('https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&limit=200');
+        setWsStatus('connecting');
+        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${activeSymbol}&interval=1m&limit=200`);
         const data = await res.json();
         
         const formattedKlines: Kline[] = data.map((d: any) => ({
@@ -168,18 +178,20 @@ export default function App() {
           isFinal: true
         }));
         
-        setKlines(formattedKlines);
-        connectWs();
+        if (isMounted) {
+          setKlines(formattedKlines);
+          connectWs();
+        }
       } catch (error) {
         console.error("Failed to fetch initial data", error);
-        setWsStatus('error');
+        if (isMounted) setWsStatus('error');
       }
     };
 
     const connectWs = () => {
       if (wsRef.current) wsRef.current.close();
       
-      const ws = new WebSocket('wss://stream.binance.com:9443/ws/solusdt@kline_1m');
+      const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${activeSymbol.toLowerCase()}@kline_1m`);
       wsRef.current = ws;
 
       ws.onopen = () => setWsStatus('connected');
@@ -224,9 +236,10 @@ export default function App() {
     initData();
 
     return () => {
+      isMounted = false;
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [activeSymbol]);
 
   // Prune old signals (older than 5 minutes)
   useEffect(() => {
@@ -284,7 +297,8 @@ export default function App() {
     // Only record once per 1m candle
     if (current.time !== lastSignalTimeRef.current) {
       const entry = current.close;
-      const sl = type === 'LONG' ? current.low - 0.02 : current.high + 0.02;
+      const offset = ASSETS[activeSymbol].tickOffset;
+      const sl = type === 'LONG' ? current.low - offset : current.high + offset;
       const tp = type === 'LONG' ? entry + ((entry - sl) * 2) : entry - ((sl - entry) * 2);
 
       const newSignal: SignalRecord = {
@@ -320,13 +334,26 @@ export default function App() {
               <Activity className="w-6 h-6 text-emerald-400" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-zinc-100 tracking-tight flex items-center gap-2">
-                SOL/USDT
-                <span className="text-xs font-mono px-2 py-0.5 bg-zinc-800 rounded text-zinc-400">1m</span>
-              </h1>
+              <div className="flex items-center gap-2 mb-1">
+                {Object.entries(ASSETS).map(([sym, config]) => (
+                  <button
+                    key={sym}
+                    onClick={() => setActiveSymbol(sym as SymbolKey)}
+                    className={cn(
+                      "px-2 py-1 rounded text-xs font-bold transition-colors",
+                      activeSymbol === sym 
+                        ? "bg-emerald-500 text-zinc-950" 
+                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                    )}
+                  >
+                    {config.label}
+                  </button>
+                ))}
+                <span className="text-xs font-mono px-2 py-1 bg-zinc-800 rounded text-zinc-400 ml-2">1m</span>
+              </div>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className={cn("font-mono font-bold text-lg", isPriceUp ? "text-emerald-400" : "text-rose-400")}>
-                  ${currentPrice.toFixed(2)}
+                  ${currentPrice.toFixed(ASSETS[activeSymbol].decimals)}
                 </span>
                 {wsStatus === 'connected' ? (
                   <span className="flex items-center gap-1 text-xs text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">
@@ -370,9 +397,9 @@ export default function App() {
                 <TrendingUp className="w-4 h-4" /> Precio & EMAs (50, 100, 150)
               </h2>
               <div className="flex gap-3 text-xs font-mono">
-                <span className="text-blue-400">EMA50: {current?.ema50?.toFixed(2)}</span>
-                <span className="text-amber-400">EMA100: {current?.ema100?.toFixed(2)}</span>
-                <span className="text-purple-400">EMA150: {current?.ema150?.toFixed(2)}</span>
+                <span className="text-blue-400">EMA50: {current?.ema50?.toFixed(ASSETS[activeSymbol].decimals)}</span>
+                <span className="text-amber-400">EMA100: {current?.ema100?.toFixed(ASSETS[activeSymbol].decimals)}</span>
+                <span className="text-purple-400">EMA150: {current?.ema150?.toFixed(ASSETS[activeSymbol].decimals)}</span>
               </div>
             </div>
             <div className="flex-1 w-full">
@@ -380,7 +407,7 @@ export default function App() {
                 <ComposedChart data={chartData.slice(-60)} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                   <XAxis dataKey="timeStr" stroke="#52525b" fontSize={10} tickMargin={10} minTickGap={30} />
-                  <YAxis domain={[priceMin, priceMax]} stroke="#52525b" fontSize={10} tickFormatter={(val) => val.toFixed(2)} orientation="right" />
+                  <YAxis domain={[priceMin, priceMax]} stroke="#52525b" fontSize={10} tickFormatter={(val) => val.toFixed(ASSETS[activeSymbol].decimals)} orientation="right" />
                   <Tooltip 
                     contentStyle={{ backgroundColor: '#18181b', borderColor: '#27272a', borderRadius: '8px', fontSize: '12px' }}
                     itemStyle={{ color: '#e4e4e7' }}
@@ -559,7 +586,7 @@ export default function App() {
                   {/* Entry */}
                   <div className="flex justify-between items-center bg-zinc-950/50 p-2 rounded border border-zinc-800">
                     <span className="text-zinc-500">Entrada Aprox:</span>
-                    <span className="text-zinc-100 font-bold">${currentPrice.toFixed(2)}</span>
+                    <span className="text-zinc-100 font-bold">${currentPrice.toFixed(ASSETS[activeSymbol].decimals)}</span>
                   </div>
                   
                   {/* Stop Loss */}
@@ -569,10 +596,10 @@ export default function App() {
                     </span>
                     <div className="text-right">
                       <div className="text-rose-400 font-bold">
-                        ${type === 'LONG' ? (current.low - 0.02).toFixed(2) : (current.high + 0.02).toFixed(2)}
+                        ${type === 'LONG' ? (current.low - ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals) : (current.high + ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals)}
                       </div>
                       <div className="text-[10px] text-rose-500/70">
-                        {type === 'LONG' ? '2 ticks bajo el mínimo' : '2 ticks sobre el máximo'}
+                        {type === 'LONG' ? 'Bajo el mínimo + offset' : 'Sobre el máximo + offset'}
                       </div>
                     </div>
                   </div>
@@ -585,8 +612,8 @@ export default function App() {
                     <div className="text-right">
                       <div className="text-emerald-400 font-bold">
                         ${type === 'LONG' ? 
-                          (currentPrice + ((currentPrice - (current.low - 0.02)) * 2)).toFixed(2) : 
-                          (currentPrice - (((current.high + 0.02) - currentPrice) * 2)).toFixed(2)}
+                          (currentPrice + ((currentPrice - (current.low - ASSETS[activeSymbol].tickOffset)) * 2)).toFixed(ASSETS[activeSymbol].decimals) : 
+                          (currentPrice - (((current.high + ASSETS[activeSymbol].tickOffset) - currentPrice) * 2)).toFixed(ASSETS[activeSymbol].decimals)}
                       </div>
                       <div className="text-[10px] text-emerald-500/70">
                         Ratio 1:2 (Doble del riesgo)
@@ -643,15 +670,15 @@ export default function App() {
                       <div className="grid grid-cols-3 gap-2 font-mono mt-2 bg-zinc-950/50 p-2 rounded">
                         <div>
                           <div className="text-zinc-500 text-[10px]">Entrada</div>
-                          <div className="text-zinc-200">${sig.entry.toFixed(2)}</div>
+                          <div className="text-zinc-200">${sig.entry.toFixed(ASSETS[activeSymbol].decimals)}</div>
                         </div>
                         <div>
                           <div className="text-zinc-500 text-[10px]">SL</div>
-                          <div className="text-rose-400">${sig.sl.toFixed(2)}</div>
+                          <div className="text-rose-400">${sig.sl.toFixed(ASSETS[activeSymbol].decimals)}</div>
                         </div>
                         <div>
                           <div className="text-zinc-500 text-[10px]">TP</div>
-                          <div className="text-emerald-400">${sig.tp.toFixed(2)}</div>
+                          <div className="text-emerald-400">${sig.tp.toFixed(ASSETS[activeSymbol].decimals)}</div>
                         </div>
                       </div>
                     </motion.div>
