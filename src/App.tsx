@@ -37,6 +37,7 @@ interface IndicatorData extends Kline {
   stochK: number;
   stochD: number;
   cvd: number;
+  avgVolume: number;
 }
 
 interface SignalRecord {
@@ -84,6 +85,13 @@ function computeIndicators(klines: Kline[]): IndicatorData[] {
     const delta = d.takerBuyVolume - sellVol;
     cvd += delta;
 
+    // Avg Volume
+    let avgVolume = d.volume;
+    if (i >= 10) {
+      const volWindow = klines.slice(i - 10, i);
+      avgVolume = volWindow.reduce((sum, w) => sum + w.volume, 0) / 10;
+    }
+
     // RSI
     let rsi = 50;
     if (i > 0) {
@@ -119,7 +127,7 @@ function computeIndicators(klines: Kline[]): IndicatorData[] {
 
     result.push({
       ...d,
-      ema50, ema100, ema150, cvd, rsi, stochK_raw: stochK_raw, stochK: 50, stochD: 50,
+      ema50, ema100, ema150, cvd, rsi, stochK_raw: stochK_raw, stochK: 50, stochD: 50, avgVolume,
       timeStr: new Date(d.time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
     } as any);
   }
@@ -262,6 +270,10 @@ export default function App() {
   const current = chartData[chartData.length - 1];
   const prev = chartData[chartData.length - 2];
 
+  const last3 = chartData.slice(-3);
+  const swingLow = last3.length > 0 ? Math.min(...last3.map(d => d.low)) : (current?.low || 0);
+  const swingHigh = last3.length > 0 ? Math.max(...last3.map(d => d.high)) : (current?.high || 0);
+
   let checks = { ema: 'NONE', mom: 'NONE', cvd: 'NONE', time: isEntryWindow };
   let signal = 'WAIT';
   let type = 'NONE';
@@ -270,11 +282,13 @@ export default function App() {
     const isBullishEMA = current.close > (current.ema50 || 0) && (current.ema50 || 0) > (current.ema100 || 0) && (current.ema100 || 0) > (current.ema150 || 0);
     const isBearishEMA = current.close < (current.ema50 || 0) && (current.ema50 || 0) < (current.ema100 || 0) && (current.ema100 || 0) < (current.ema150 || 0);
 
-    const isBullishMom = (current.rsi > 50 || current.rsi < 20) && current.stochK > current.stochD && current.stochK > prev.stochK;
-    const isBearishMom = (current.rsi < 50 || current.rsi > 80) && current.stochK < current.stochD && current.stochK < prev.stochK;
+    const isBullishMom = current.rsi > 50 && current.stochK > current.stochD && current.stochK > prev.stochK;
+    const isBearishMom = current.rsi < 50 && current.stochK < current.stochD && current.stochK < prev.stochK;
 
-    const isBullishCVD = current && prev ? current.cvd > prev.cvd : false;
-    const isBearishCVD = current && prev ? current.cvd < prev.cvd : false;
+    const isVolumeSpike = current.volume > current.avgVolume * 1.2; // 20% above average
+
+    const isBullishCVD = current.cvd > prev.cvd && isVolumeSpike;
+    const isBearishCVD = current.cvd < prev.cvd && isVolumeSpike;
 
     checks.ema = isBullishEMA ? 'LONG' : isBearishEMA ? 'SHORT' : 'NONE';
     checks.mom = isBullishMom ? 'LONG' : isBearishMom ? 'SHORT' : 'NONE';
@@ -300,7 +314,7 @@ export default function App() {
     if (current.time !== lastSignalTimeRef.current) {
       const entry = current.close;
       const offset = ASSETS[activeSymbol].tickOffset;
-      const sl = type === 'LONG' ? current.low - offset : current.high + offset;
+      const sl = type === 'LONG' ? swingLow - offset : swingHigh + offset;
       const tp = type === 'LONG' ? entry + ((entry - sl) * 2) : entry - ((sl - entry) * 2);
 
       const newSignal: SignalRecord = {
@@ -598,10 +612,10 @@ export default function App() {
                     </span>
                     <div className="text-right">
                       <div className="text-rose-400 font-bold">
-                        ${type === 'LONG' ? (current.low - ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals) : (current.high + ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals)}
+                        ${type === 'LONG' ? (swingLow - ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals) : (swingHigh + ASSETS[activeSymbol].tickOffset).toFixed(ASSETS[activeSymbol].decimals)}
                       </div>
                       <div className="text-[10px] text-rose-500/70">
-                        {type === 'LONG' ? 'Bajo el mínimo + offset' : 'Sobre el máximo + offset'}
+                        {type === 'LONG' ? 'Mínimo 3 velas + offset' : 'Máximo 3 velas + offset'}
                       </div>
                     </div>
                   </div>
@@ -614,8 +628,8 @@ export default function App() {
                     <div className="text-right">
                       <div className="text-emerald-400 font-bold">
                         ${type === 'LONG' ? 
-                          (currentPrice + ((currentPrice - (current.low - ASSETS[activeSymbol].tickOffset)) * 2)).toFixed(ASSETS[activeSymbol].decimals) : 
-                          (currentPrice - (((current.high + ASSETS[activeSymbol].tickOffset) - currentPrice) * 2)).toFixed(ASSETS[activeSymbol].decimals)}
+                          (currentPrice + ((currentPrice - (swingLow - ASSETS[activeSymbol].tickOffset)) * 2)).toFixed(ASSETS[activeSymbol].decimals) : 
+                          (currentPrice - (((swingHigh + ASSETS[activeSymbol].tickOffset) - currentPrice) * 2)).toFixed(ASSETS[activeSymbol].decimals)}
                       </div>
                       <div className="text-[10px] text-emerald-500/70">
                         Ratio 1:2 (Doble del riesgo)
